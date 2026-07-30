@@ -89,6 +89,47 @@ application code worth packaging — writing it against an empty app would
 just be an empty shell with nothing to defend.
 
 ---
+ 
+## 2026-07-31 — ID generation: sequential integer + base62 encoding (replacing pure-random codes)
+ 
+**Problem discovered by testing:** The original `generate_short_code()` picked 6
+random characters with no uniqueness check against existing codes. Two issues
+surfaced from manual testing:
+ 
+1. Shortening the same URL twice produced two different short_codes
+   (`25FmYB` vs `RKhYGi`). This is actually a legitimate product decision, not
+   a bug — real shorteners (e.g. Bitly) intentionally allow this, since
+   separate short links to the same destination may need separate click
+   analytics (e.g. tracking an email campaign link separately from a tweet
+   link, even if both point to the same page). Decision: keep this behavior —
+   every `/shorten` call creates a new, independent short_code.
+2. The real risk: pure-random generation has **no collision check**. Two
+   different long URLs could, by chance, be assigned the same random code,
+   silently overwriting one mapping with another — no error, no warning,
+   quiet data loss. With 6 chars over a 62-character alphabet (62^6 ≈ 56
+   billion combinations) this feels unlikely at small scale, but the
+   **birthday paradox** means collision probability grows much faster than
+   intuition suggests as stored URLs scale up. Not safe to rely on chance
+   alone in a real system.
+**Decision:** Replace random generation with:
+1. A **unique, auto-incrementing integer ID** for every new URL (guaranteed
+   unique by the database itself — no two rows can ever share an ID).
+2. **Base62 encode** that integer (digits 0-9, lowercase a-z, uppercase A-Z —
+   62 symbols) to produce a short, URL-safe string.
+Since uniqueness comes from the database-guaranteed integer ID, not from
+randomness, collisions become structurally impossible rather than just
+statistically unlikely.
+ 
+**Alternatives considered:**
+- **Random string + check-and-retry-on-collision** — works, but requires an
+  extra DB lookup on every write to check for collisions, and still has a
+  (shrinking but nonzero) chance of needing multiple retries under load.
+  Sequential ID + encoding avoids this entirely by construction.
+- **UUID4** — statistically collision-safe, but UUIDs are long (36 chars)
+  and not appropriate for something meant to be short and shareable.
+- **Base64** — includes `+` and `/` characters that aren't safe in URLs
+  without escaping. Base62 avoids this by using only alphanumeric characters.
+---
 
 ## Template for future entries
 
